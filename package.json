@@ -1,0 +1,33 @@
+{
+  "name": "ton-shield-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "TON Shield AI backend API for risk analysis of TON transactions and jettons.",
+  "main": "src/app.js",
+  "scripts": {
+    "dev": "NODE_ENV=development node src/app.js",
+    "start": "NODE_ENV=production node src/app.js"
+  },
+  "keywords": [
+    "ton",
+    "security",
+    "fastify",
+    "risk-engine"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@supabase/supabase-js": "^2.86.0",
+    "@ton/core": "^0.62.0",
+    "@ton/ton": "^16.0.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "openai": "^4.73.0",
+    "pino": "^8.20.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

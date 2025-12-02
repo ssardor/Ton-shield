@@ -1,0 +1,357 @@
+openapi: 3.0.3
+info:
+  title: TON Shield AI Backend API
+  version: 0.1.0
+  description: |
+    REST API powering the TON Shield browser extension and Telegram Mini App.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+paths:
+  "/":
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  "/analyze/transaction":
+    post:
+      tags: [Analysis]
+      summary: Analyze a TON transaction request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionRequest"
+      responses:
+        "200":
+          description: Risk assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionResponse"
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Upstream provider failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/analyze/jetton/{address}":
+    get:
+      tags: [Analysis]
+      summary: Analyze a jetton master contract
+      parameters:
+        - in: path
+          name: address
+          required: true
+          schema:
+            type: string
+          description: TON jetton master address in raw format
+      responses:
+        "200":
+          description: Jetton assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JettonResponse"
+        "400":
+          description: Invalid address or non-jetton wallet supplied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Upstream provider failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/analyze/address/{address}":
+    get:
+      tags: [Analysis]
+      summary: Quick risk check for a TON wallet or contract address
+      parameters:
+        - in: path
+          name: address
+          required: true
+          schema:
+            type: string
+          description: TON address in raw format
+      responses:
+        "200":
+          description: Address assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddressResponse"
+        "400":
+          description: Missing address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Upstream provider failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/analyze/link":
+    post:
+      tags: [Analysis]
+      summary: Analyze a website or Telegram Mini App link for phishing risks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRequest"
+      responses:
+        "200":
+          description: Link risk assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkResponse"
+        "400":
+          description: Invalid or missing URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Analysis service failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: TON Shield AI backend
+        version:
+          type: string
+          example: 0.1.0
+        timestamp:
+          type: string
+          format: date-time
+    TransactionRequest:
+      type: object
+      required: [user_wallet, target_address]
+      properties:
+        user_wallet:
+          type: string
+          description: Originating wallet address
+        target_address:
+          type: string
+          description: Destination wallet or contract
+        amount_nanoton:
+          type: string
+          description: Amount in nanotons
+        payload_boc:
+          type: string
+          description: Optional payload in base64 BOC
+        origin_domain:
+          type: string
+          description: Domain or app triggering the request
+    TransactionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        data:
+          type: object
+          properties:
+            risk_level:
+              type: string
+              enum: [SAFE, WARNING, CRITICAL]
+            risk_score:
+              type: integer
+            signals:
+              type: array
+              items:
+                type: string
+            target_address:
+              type: string
+            target_account:
+              type: object
+              nullable: true
+              properties:
+                status:
+                  type: string
+                balance:
+                  type: string
+                  description: Balance converted to TON (4 decimal precision)
+                  balance_nanoton:
+                    type: string
+                    description: Raw value in nanotons from TON API
+                interfaces:
+                  type: array
+                  items:
+                    type: string
+                name:
+                  type: string
+            ai_explanation:
+              type: string
+    JettonResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        data:
+          type: object
+          properties:
+            jetton_address:
+              type: string
+            is_honeypot_suspected:
+              type: boolean
+            risk_score:
+              type: integer
+            risk_level:
+              type: string
+              enum: [SAFE, WARNING, CRITICAL]
+            signals:
+              type: array
+              items:
+                type: string
+            metadata:
+              type: object
+              nullable: true
+              properties:
+                name:
+                  type: string
+                symbol:
+                  type: string
+                description:
+                  type: string
+                image:
+                  type: string
+                decimals:
+                  type: string
+                total_supply:
+                  type: string
+                total_supply_tokens:
+                  type: string
+                  description: Total supply formatted according to the jetton decimals
+              additionalProperties: true
+            holder_count:
+              type: integer
+            admin_address:
+              type: string
+              nullable: true
+            ai_verdict:
+              type: string
+    AddressResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        data:
+          type: object
+          properties:
+            address:
+              type: string
+              nullable: true
+            risk_level:
+              type: string
+              enum: [SAFE, WARNING, CRITICAL]
+            risk_score:
+              type: integer
+            signals:
+              type: array
+              items:
+                type: string
+            account:
+              type: object
+              nullable: true
+              properties:
+                status:
+                  type: string
+                balance:
+                  type: string
+                  description: Balance converted to TON (4 decimal precision)
+                  balance_nanoton:
+                    type: string
+                    description: Raw value in nanotons from TON API
+                interfaces:
+                  type: array
+                  items:
+                    type: string
+                name:
+                  type: string
+            ai_explanation:
+              type: string
+    LinkRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Website URL or Telegram Mini App link (e.g., https://example.com or https://t.me/botname)
+          example: "https://ston-fi-drop.com"
+    LinkResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        data:
+          type: object
+          properties:
+            url:
+              type: string
+            domain:
+              type: string
+            is_telegram_link:
+              type: boolean
+            bot_username:
+              type: string
+              nullable: true
+            risk_level:
+              type: string
+              enum: [SAFE, WARNING, CRITICAL]
+            risk_score:
+              type: integer
+            signals:
+              type: array
+              items:
+                type: string
+            domain_age_days:
+              type: integer
+              nullable: true
+              description: Estimated domain age in days (null if unknown)
+            has_official_news:
+              type: boolean
+              description: Whether AI found official mentions or trusted sources
+            ai_summary:
+              type: string
+              description: AI-generated summary of web search findings
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
