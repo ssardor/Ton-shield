@@ -10,15 +10,18 @@ export default async function linkRoutes(fastify) {
       };
     }
 
-    // Basic URL validation
-    try {
-      new URL(url);
-    } catch (err) {
-      reply.code(400);
-      return {
-        error: "VALIDATION_ERROR",
-        message: "Invalid URL format",
-      };
+    // Basic URL validation - allow @username format for Telegram bots
+    const isTelegramUsername = url.startsWith('@');
+    if (!isTelegramUsername) {
+      try {
+        new URL(url);
+      } catch (err) {
+        reply.code(400);
+        return {
+          error: "VALIDATION_ERROR",
+          message: "Invalid URL format. Use full URL or @username for Telegram bots",
+        };
+      }
     }
 
     try {
