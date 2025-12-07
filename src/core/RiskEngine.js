@@ -479,6 +479,7 @@ export default class RiskEngine {
         signals,
         domain: null,
         is_telegram_link: false,
+        bot_username: null,
         ai_summary: "Unable to analyze: no valid URL provided.",
       };
     }
@@ -495,37 +496,118 @@ export default class RiskEngine {
         signals,
         domain: null,
         is_telegram_link: false,
+        bot_username: null,
         ai_summary: "Unable to parse the provided URL.",
       };
     }
 
-    const { domain, isTelegramLink, botUsername } = parsed;
+    const { domain, isTelegramLink, botUsername, isMiniApp } = parsed;
 
-    // Check for suspicious domain patterns
-    const patternSignals = this.linkService?.hasSuspiciousPattern(domain) || [];
-    signals.push(...patternSignals);
-    riskScore += patternSignals.length * 15;
-
-    // Estimate domain age
-    const { ageInDays, signals: ageSignals } = await (this.linkService?.estimateDomainAge(domain) || { ageInDays: null, signals: [] });
-    signals.push(...ageSignals);
-
-    if (ageInDays === null) {
-      // Unknown age increases risk
-      riskScore += 25;
-    } else if (ageInDays < 90) {
-      signals.push(`Domain is very new (${ageInDays} days old)`);
-      riskScore += 35;
-    } else if (ageInDays < 365) {
-      signals.push(`Domain is relatively new (${ageInDays} days old)`);
-      riskScore += 15;
+    // Telegram Bot/Mini App Analysis
+    let telegramAnalysis = null;
+    if (isTelegramLink && botUsername) {
+      telegramAnalysis = await (this.linkService?.analyzeTelegramApp(parsed) || null);
+      
+      if (telegramAnalysis) {
+        // Check if it's a valid bot format first
+        if (telegramAnalysis.is_valid_bot_format === false) {
+          signals.push(`❌ Invalid bot username format`);
+          signals.push(`Telegram bots MUST end with 'bot' or '_bot'`);
+          riskScore += 60; // High risk for invalid format
+        }
+        
+        // Add all signals from Telegram analysis
+        signals.push(...telegramAnalysis.signals);
+        
+        // Calculate risk based on Telegram-specific factors
+        
+        // Official bot = lower risk
+        if (telegramAnalysis.is_official) {
+          signals.push(`✅ Official bot verified: ${telegramAnalysis.official_brand}`);
+          riskScore = Math.max(riskScore - 20, 5);
+        } 
+        // Brand impersonation = high risk
+        else if (telegramAnalysis.brands_detected.length > 0) {
+          if (telegramAnalysis.brands_detected.length > 1) {
+            signals.push(`❗ Multiple brands detected: ${telegramAnalysis.brands_detected.join(', ')} → likely fake`);
+            riskScore += 50;
+          } else {
+            signals.push(`⚠️ Possible ${telegramAnalysis.brands_detected[0]} impersonation`);
+            riskScore += 30;
+          }
+        }
+        
+        // Mini App domain mismatch
+        if (isMiniApp && telegramAnalysis.app_domain) {
+          const officialDomains = {
+            'notcoin': 'notcoin.io',
+            'stonfi': 'ston.fi',
+            'dedust': 'dedust.io',
+            'getgems': 'getgems.io',
+            'tonkeeper': 'tonkeeper.com',
+          };
+          
+          for (const [keyword, officialDomain] of Object.entries(officialDomains)) {
+            if (botUsername.toLowerCase().includes(keyword) && !telegramAnalysis.app_domain.includes(officialDomain)) {
+              signals.push(`🚨 Domain mismatch: bot claims '${keyword}' but uses '${telegramAnalysis.app_domain}' (official: ${officialDomain})`);
+              riskScore += 40;
+            }
+          }
+        }
+        
+        // TonConnect permissions analysis
+        if (telegramAnalysis.permissions.length > 0) {
+          if (telegramAnalysis.permissions.includes('sendTransaction') || telegramAnalysis.permissions.includes('signTransaction')) {
+            signals.push(`⚠️ Requests permission to SEND TRANSACTIONS from your wallet`);
+            riskScore += 25;
+          }
+          
+          if (telegramAnalysis.permissions.length > 2) {
+            signals.push(`⚠️ Requests ${telegramAnalysis.permissions.length} permissions (excessive)`);
+            riskScore += 15;
+          }
+        }
+        
+        // Analyze wallet addresses if found
+        if (telegramAnalysis.wallet_addresses.length > 0) {
+          for (const walletAddr of telegramAnalysis.wallet_addresses) {
+            const { riskScore: addrRisk, signals: addrSignals } = await this.assessAddressBasics(walletAddr);
+            
+            if (addrRisk >= 80) {
+              signals.push(`🚨 Linked wallet flagged as HIGH RISK: ${walletAddr}`);
+              riskScore += 35;
+            } else if (addrRisk >= 40) {
+              signals.push(`⚠️ Linked wallet has warnings: ${walletAddr}`);
+              riskScore += 15;
+            }
+            
+            // Add specific address signals
+            signals.push(...addrSignals.map(s => `Wallet analysis: ${s}`));
+          }
+        }
+      }
     }
 
-    // Check Telegram bot if applicable
-    if (isTelegramLink && botUsername) {
-      const { signals: botSignals } = await (this.linkService?.checkTelegramBot(botUsername) || { signals: [] });
-      signals.push(...botSignals);
-      riskScore += botSignals.length * 10;
+    // Check for suspicious domain patterns (non-Telegram links)
+    if (!isTelegramLink) {
+      const patternSignals = this.linkService?.hasSuspiciousPattern(domain) || [];
+      signals.push(...patternSignals);
+      riskScore += patternSignals.length * 15;
+
+      // Estimate domain age
+      const { ageInDays, signals: ageSignals } = await (this.linkService?.estimateDomainAge(domain) || { ageInDays: null, signals: [] });
+      signals.push(...ageSignals);
+
+      if (ageInDays === null) {
+        // Unknown age increases risk
+        riskScore += 25;
+      } else if (ageInDays < 90) {
+        signals.push(`Domain is very new (${ageInDays} days old)`);
+        riskScore += 35;
+      } else if (ageInDays < 365) {
+        signals.push(`Domain is relatively new (${ageInDays} days old)`);
+        riskScore += 15;
+      }
     }
 
     // AI web search for official mentions/news
@@ -549,7 +631,8 @@ export default class RiskEngine {
 
     const risk_level = this.mapScoreToLevel(riskScore);
 
-    return {
+    // Build comprehensive response
+    const response = {
       url,
       domain,
       is_telegram_link: isTelegramLink,
@@ -557,9 +640,26 @@ export default class RiskEngine {
       risk_level,
       risk_score: riskScore,
       signals,
-      domain_age_days: ageInDays,
-      has_official_news: hasOfficialNews,
       ai_summary: webSearchSummary,
     };
+
+    // Add Telegram-specific fields if applicable
+    if (telegramAnalysis) {
+      response.telegram_analysis = {
+        is_mini_app: telegramAnalysis.is_mini_app,
+        is_official_bot: telegramAnalysis.is_official,
+        official_brand: telegramAnalysis.official_brand,
+        brands_detected: telegramAnalysis.brands_detected,
+        app_domain: telegramAnalysis.app_domain,
+        permissions_requested: telegramAnalysis.permissions,
+        linked_wallets: telegramAnalysis.wallet_addresses,
+      };
+    } else {
+      // For non-Telegram links, include domain age
+      response.domain_age_days = null;
+      response.has_official_news = hasOfficialNews;
+    }
+
+    return response;
   }
 }
