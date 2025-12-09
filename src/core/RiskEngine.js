@@ -343,37 +343,53 @@ export default class RiskEngine {
     }
   }
 
-  sanitizeTransactions(transactions) {
-    if (!Array.isArray(transactions)) return [];
+  sanitizeTransactions(events) {
+    if (!Array.isArray(events)) return [];
     
-    return transactions.slice(0, 10).map(tx => {
-      const inMsg = tx.in_msg;
-      const outMsgs = tx.out_msgs || [];
+    return events.slice(0, 10).map(event => {
+      // TON API events have actions array
+      const actions = event.actions || [];
+      const firstAction = actions[0] || {};
       
-      // Determine direction and counterparty
+      // Determine direction and details from action
       let direction = 'unknown';
       let counterparty = null;
       let amount = '0';
+      let actionType = firstAction.type || 'unknown';
       
-      if (inMsg && inMsg.value) {
-        direction = 'incoming';
-        counterparty = inMsg.source?.address || null;
-        amount = this.formatTonAmount(inMsg.value);
-      } else if (outMsgs.length > 0) {
-        direction = 'outgoing';
-        counterparty = outMsgs[0].destination?.address || null;
-        amount = this.formatTonAmount(outMsgs[0].value || 0);
+      // Handle different action types
+      if (firstAction.type === 'TonTransfer') {
+        const tonTransfer = firstAction.TonTransfer || {};
+        if (tonTransfer.recipient?.address) {
+          direction = 'outgoing';
+          counterparty = tonTransfer.recipient.address;
+        } else if (tonTransfer.sender?.address) {
+          direction = 'incoming';
+          counterparty = tonTransfer.sender.address;
+        }
+        amount = this.formatTonAmount(tonTransfer.amount || 0);
+      } else if (firstAction.type === 'JettonTransfer') {
+        const jettonTransfer = firstAction.JettonTransfer || {};
+        if (jettonTransfer.recipient?.address) {
+          direction = 'outgoing';
+          counterparty = jettonTransfer.recipient.address;
+        } else if (jettonTransfer.sender?.address) {
+          direction = 'incoming';
+          counterparty = jettonTransfer.sender.address;
+        }
+        amount = jettonTransfer.amount || '0';
+        actionType = 'Jetton Transfer';
       }
       
       return {
-        hash: tx.hash || null,
-        timestamp: tx.utime || tx.now || null,
+        event_id: event.event_id || null,
+        timestamp: event.timestamp || null,
         direction,
         counterparty: counterparty ? this.normalizeAddress(counterparty) : null,
         amount,
-        amount_nanoton: inMsg?.value || outMsgs[0]?.value || '0',
-        success: tx.success ?? true,
-        fee: this.formatTonAmount(tx.total_fees || tx.fee || 0),
+        action_type: actionType,
+        success: !event.in_progress && !firstAction.status === 'failed',
+        fee: event.fee ? this.formatTonAmount(event.fee.total || 0) : '0',
       };
     });
   }

@@ -70,10 +70,11 @@ export default class TonService {
         limit: params.limit ?? 10,
         ...params,
       };
-      const { data } = await this.client.get(`/blockchain/accounts/${address}/transactions`, {
+      // Use /accounts/{account_id}/events endpoint (recommended by TON API)
+      const { data } = await this.client.get(`/accounts/${address}/events`, {
         params: query,
       });
-      return data?.transactions || [];
+      return data?.events || [];
     } catch (err) {
       this.handleError("getAccountTransactions", err, { address });
       return [];
