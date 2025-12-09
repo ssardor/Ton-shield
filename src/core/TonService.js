@@ -63,6 +63,23 @@ export default class TonService {
     }
   }
 
+  async getAccountTransactions(address, params = {}) {
+    if (!address) return [];
+    try {
+      const query = {
+        limit: params.limit ?? 10,
+        ...params,
+      };
+      const { data } = await this.client.get(`/blockchain/accounts/${address}/transactions`, {
+        params: query,
+      });
+      return data?.transactions || [];
+    } catch (err) {
+      this.handleError("getAccountTransactions", err, { address });
+      return [];
+    }
+  }
+
   handleError(method, err, meta = {}) {
     const message = err.response?.data?.message || err.message;
     this.logger?.warn({ method, meta, message }, "TON API request failed");

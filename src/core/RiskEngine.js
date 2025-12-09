@@ -129,6 +129,9 @@ export default class RiskEngine {
     const risk_level = this.mapScoreToLevel(riskScore);
     const accountSnapshot = this.sanitizeAccount(accountInfo);
 
+    // Fetch recent transactions
+    const recentTransactions = await this.fetchRecentTransactions(normalizedAddress);
+
     const ai_explanation = await this.buildAiExplanation(
       {
         type: "address",
@@ -148,6 +151,7 @@ export default class RiskEngine {
       risk_score: riskScore,
       signals,
       account: accountSnapshot,
+      recent_transactions: recentTransactions,
       ai_explanation,
     };
   }
@@ -326,6 +330,52 @@ export default class RiskEngine {
   async fetchJettonHolders(address) {
     if (!this.tonService || !address) return [];
     return this.tonService.getJettonHolders(address, { limit: 20 });
+  }
+
+  async fetchRecentTransactions(address) {
+    if (!this.tonService || !address) return [];
+    try {
+      const transactions = await this.tonService.getAccountTransactions(address, { limit: 10 });
+      return this.sanitizeTransactions(transactions);
+    } catch (err) {
+      this.logger?.warn({ err, address }, 'Failed to fetch recent transactions');
+      return [];
+    }
+  }
+
+  sanitizeTransactions(transactions) {
+    if (!Array.isArray(transactions)) return [];
+    
+    return transactions.slice(0, 10).map(tx => {
+      const inMsg = tx.in_msg;
+      const outMsgs = tx.out_msgs || [];
+      
+      // Determine direction and counterparty
+      let direction = 'unknown';
+      let counterparty = null;
+      let amount = '0';
+      
+      if (inMsg && inMsg.value) {
+        direction = 'incoming';
+        counterparty = inMsg.source?.address || null;
+        amount = this.formatTonAmount(inMsg.value);
+      } else if (outMsgs.length > 0) {
+        direction = 'outgoing';
+        counterparty = outMsgs[0].destination?.address || null;
+        amount = this.formatTonAmount(outMsgs[0].value || 0);
+      }
+      
+      return {
+        hash: tx.hash || null,
+        timestamp: tx.utime || tx.now || null,
+        direction,
+        counterparty: counterparty ? this.normalizeAddress(counterparty) : null,
+        amount,
+        amount_nanoton: inMsg?.value || outMsgs[0]?.value || '0',
+        success: tx.success ?? true,
+        fee: this.formatTonAmount(tx.total_fees || tx.fee || 0),
+      };
+    });
   }
 
   sanitizeAccount(accountInfo) {
