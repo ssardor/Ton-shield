@@ -122,15 +122,24 @@ export default class RiskEngine {
     const {
       normalizedAddress,
       signals,
-      riskScore,
+      riskScore: baseRiskScore,
       accountInfo,
     } = await this.assessAddressBasics(address);
 
-    const risk_level = this.mapScoreToLevel(riskScore);
+    let riskScore = baseRiskScore;
     const accountSnapshot = this.sanitizeAccount(accountInfo);
 
     // Fetch recent transactions
     const recentTransactions = await this.fetchRecentTransactions(normalizedAddress);
+
+    // Analyze transaction patterns for suspicious activity
+    const txAnalysis = this.analyzeTransactionPatterns(recentTransactions);
+    if (txAnalysis.suspicious) {
+      signals.push(...txAnalysis.signals);
+      riskScore = Math.max(riskScore, txAnalysis.riskScore);
+    }
+
+    const risk_level = this.mapScoreToLevel(riskScore);
 
     const ai_explanation = await this.buildAiExplanation(
       {
@@ -140,6 +149,7 @@ export default class RiskEngine {
         signals,
         address: normalizedAddress,
         account: accountSnapshot,
+        transaction_patterns: txAnalysis,
       },
       signals,
       risk_level
@@ -152,6 +162,11 @@ export default class RiskEngine {
       signals,
       account: accountSnapshot,
       recent_transactions: recentTransactions,
+      transaction_analysis: {
+        total_analyzed: recentTransactions.length,
+        suspicious_patterns: txAnalysis.patterns,
+        risk_indicators: txAnalysis.signals,
+      },
       ai_explanation,
     };
   }
@@ -341,6 +356,114 @@ export default class RiskEngine {
       this.logger?.warn({ err, address }, 'Failed to fetch recent transactions');
       return [];
     }
+  }
+
+  /**
+   * Analyze transaction patterns for suspicious activity
+   * Returns { suspicious: boolean, signals: [], riskScore: number, patterns: [] }
+   */
+  analyzeTransactionPatterns(transactions) {
+    const result = {
+      suspicious: false,
+      signals: [],
+      riskScore: 0,
+      patterns: [],
+    };
+
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      return result;
+    }
+
+    // Pattern 1: High failure rate
+    const failedTxs = transactions.filter(tx => tx.success === false);
+    const failureRate = failedTxs.length / transactions.length;
+    if (failureRate >= 0.5 && transactions.length >= 5) {
+      result.suspicious = true;
+      result.signals.push(`High transaction failure rate: ${Math.round(failureRate * 100)}%`);
+      result.riskScore = Math.max(result.riskScore, 30);
+      result.patterns.push('high_failure_rate');
+    }
+
+    // Pattern 2: All transactions failed (possible drainer victim or misconfigured wallet)
+    if (failedTxs.length === transactions.length && transactions.length >= 3) {
+      result.suspicious = true;
+      result.signals.push('All recent transactions failed - possible drainer victim');
+      result.riskScore = Math.max(result.riskScore, 50);
+      result.patterns.push('all_failed');
+    }
+
+    // Pattern 3: Rapid transaction bursts (possible bot/spam activity)
+    if (transactions.length >= 5) {
+      const timestamps = transactions.map(tx => tx.timestamp).filter(Boolean).sort((a, b) => b - a);
+      if (timestamps.length >= 5) {
+        const timeSpan = timestamps[0] - timestamps[timestamps.length - 1]; // seconds
+        const txPerHour = (transactions.length / timeSpan) * 3600;
+        if (txPerHour > 60) { // More than 60 tx/hour
+          result.suspicious = true;
+          result.signals.push('Rapid transaction burst detected (possible bot activity)');
+          result.riskScore = Math.max(result.riskScore, 25);
+          result.patterns.push('rapid_burst');
+        }
+      }
+    }
+
+    // Pattern 4: Multiple failed outgoing transfers (drainer attack pattern)
+    const failedOutgoing = transactions.filter(tx => 
+      tx.success === false && 
+      tx.direction === 'outgoing' && 
+      tx.action_type === 'TonTransfer'
+    );
+    if (failedOutgoing.length >= 3) {
+      result.suspicious = true;
+      result.signals.push('Multiple failed outgoing transfers - possible drainer attack');
+      result.riskScore = Math.max(result.riskScore, 60);
+      result.patterns.push('failed_outgoing_transfers');
+    }
+
+    // Pattern 5: Large volume outgoing (possible compromise)
+    const outgoingTxs = transactions.filter(tx => tx.direction === 'outgoing' && tx.action_type === 'TonTransfer');
+    const totalOutgoing = outgoingTxs.reduce((sum, tx) => {
+      const amount = parseFloat(tx.amount || 0);
+      return sum + (isNaN(amount) ? 0 : amount);
+    }, 0);
+    
+    if (totalOutgoing > 10 && outgoingTxs.length >= 2) {
+      result.suspicious = true;
+      result.signals.push(`High outgoing volume: ${totalOutgoing.toFixed(2)} TON in recent transactions`);
+      result.riskScore = Math.max(result.riskScore, 35);
+      result.patterns.push('high_outgoing_volume');
+    }
+
+    // Pattern 6: Interaction with same counterparty multiple times (possible automated behavior)
+    const counterparties = transactions.map(tx => tx.counterparty).filter(Boolean);
+    const uniqueCounterparties = new Set(counterparties);
+    if (counterparties.length >= 5 && uniqueCounterparties.size === 1) {
+      result.suspicious = true;
+      result.signals.push('All transactions with single address - possible automated interaction');
+      result.riskScore = Math.max(result.riskScore, 20);
+      result.patterns.push('single_counterparty');
+    }
+
+    // Pattern 7: Only SmartContractExec actions (no normal transfers)
+    const onlySmartContract = transactions.every(tx => 
+      tx.action_type === 'SmartContractExec' || tx.action_type === 'unknown'
+    );
+    if (onlySmartContract && transactions.length >= 3) {
+      result.suspicious = true;
+      result.signals.push('Only smart contract executions - review contract interactions carefully');
+      result.riskScore = Math.max(result.riskScore, 25);
+      result.patterns.push('only_contract_exec');
+    }
+
+    // Pattern 8: Jetton transfers with unknown tokens (possible scam tokens)
+    const jettonTxs = transactions.filter(tx => tx.action_type === 'Jetton Transfer');
+    if (jettonTxs.length >= 3) {
+      result.signals.push(`${jettonTxs.length} jetton transfers detected - verify token legitimacy`);
+      result.riskScore = Math.max(result.riskScore, 15);
+      result.patterns.push('jetton_activity');
+    }
+
+    return result;
   }
 
   sanitizeTransactions(events) {
